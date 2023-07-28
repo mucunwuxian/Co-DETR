@@ -1,8 +1,12 @@
+import sys
+sys.path.append('./')
+
 # Copyright (c) OpenMMLab. All rights reserved.
 import argparse
 
 import cv2
 import mmcv
+from tqdm import tqdm
 
 from mmdet.apis import inference_detector, init_detector
 from projects import *
@@ -17,7 +21,11 @@ def parse_args():
         '--device', default='cuda:0', help='Device used for inference')
     parser.add_argument(
         '--score-thr', type=float, default=0.3, help='Bbox score threshold')
+    parser.add_argument(
+        '--batchsize', type=int, default=8, help='Batchsize of prediction')
     parser.add_argument('--out', type=str, help='Output video file')
+    parser.add_argument(
+        '--vid-stride', default=1, type=int, help='Video frame-rate stride')
     parser.add_argument('--show', action='store_true', help='Show video')
     parser.add_argument(
         '--wait-time',
@@ -36,22 +44,40 @@ def main():
 
     model = init_detector(args.config, args.checkpoint, device=args.device)
 
-    video_reader = mmcv.VideoReader(args.video)
+    video_reader = cv2.VideoCapture(args.video)
+    width = video_reader.get(cv2.CAP_PROP_FRAME_WIDTH)  # float
+    height = video_reader.get(cv2.CAP_PROP_FRAME_HEIGHT)  # float
+    fps = video_reader.get(cv2.CAP_PROP_FPS)
     video_writer = None
     if args.out:
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         video_writer = cv2.VideoWriter(
-            args.out, fourcc, video_reader.fps,
-            (video_reader.width, video_reader.height))
+            args.out, fourcc, fps,
+            (int(width), int(height)))
+        frame_batch = []
 
-    for frame in mmcv.track_iter_progress(video_reader):
-        result = inference_detector(model, frame)
-        frame = model.show_result(frame, result, score_thr=args.score_thr)
+    num_frame = video_reader.get(cv2.CAP_PROP_FRAME_COUNT)
+    for i in tqdm(range(int(num_frame))):
+        video_reader.grab()  # .read() = .grab() followed by .retrieve()
         if args.show:
-            cv2.namedWindow('video', 0)
-            mmcv.imshow(frame, 'video', args.wait_time)
+            ret, frame = video_reader.retrieve()
+            if ret:
+                result = inference_detector(model, frame)
+                frame = model.show_result(frame, result, score_thr=args.score_thr)
+                cv2.namedWindow('video', 0)
+                mmcv.imshow(frame, 'video', args.wait_time)
         if args.out:
-            video_writer.write(frame)
+            if i % args.vid_stride == 0:
+                ret, frame = video_reader.retrieve()
+                if ret:
+                    frame_batch.append(frame)
+                    if (len(frame_batch) == args.batchsize) | (i == (num_frame - 1)):
+                        result = inference_detector(model, frame_batch)
+                        for j in range(len(frame_batch)):
+                            frame = model.show_result(
+                                frame_batch[j], result[j], score_thr=args.score_thr)
+                            video_writer.write(frame)
+                        frame_batch = []
 
     if video_writer:
         video_writer.release()
