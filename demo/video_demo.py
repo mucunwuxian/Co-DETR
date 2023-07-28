@@ -1,6 +1,3 @@
-import sys
-sys.path.append('./')
-
 # Copyright (c) OpenMMLab. All rights reserved.
 import argparse
 
